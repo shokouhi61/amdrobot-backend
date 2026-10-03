@@ -1,84 +1,123 @@
-import os
 import json
-import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+import os
+from flask import Flask, jsonify
+import telebot
 
-# تنظیمات اصلی ربات
-BOT_TOKEN = "8634629192:AAHevdhY4qo7inj1gS0jQiPoc-gfpPpZk68"
+# توکن اختصاصی ربات شما
+TOKEN = "8634629192:AAHevdhY4qo7inj1gS0jQiPoc-gfpPpZk68"
+bot = telebot.TeleBot(TOKEN)
+
 ADMIN_ID = 48460135
+SETTINGS_FILE = "settings.json"
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# تنظیمات پیش‌فرض
+DEFAULT_SETTINGS = {
+    "base_rate": 720,
+    "buy_fee": 10,
+    "sell_fee": 10,
+    "balance_toman": "7,000,000,000 تومان",
+    "balance_dram": "10,000,000 درام"
+}
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    welcome_text = (
-        "سلام! به صرافی آنلاین ارمنستان خوش آمدید. 🇦🇲\n\n"
-        "برای ثبت سفارش، استعلام نرخ و خرید و فروش درام، روی دکمه «صرافی آنلاین 🇦🇲» در پایین صفحه کلیک کنید."
+def load_settings():
+    """خواندن تنظیمات از فایل روی سرور"""
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print("خطا در خواندن تنظیمات:", e)
+    return DEFAULT_SETTINGS
+
+def save_settings_to_file(settings):
+    """ذخیره تنظیمات روی سرور"""
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=4)
+        return True
+    except Exception as e:
+        print("خطا در ذخیره تنظیمات:", e)
+        return False
+
+# اپلیکیشن وب برای پاسخ‌گویی به مینی‌اپ
+app = Flask(__name__)
+
+@app.route('/get_settings', methods=['GET'])
+def get_settings():
+    """ارسال تنظیمات زنده به تمام گوشی‌ها و کاربران"""
+    settings = load_settings()
+    return jsonify(settings)
+
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    bot.reply_to(
+        message,
+        "سلام! به صرافی آنلاین ارمنستان خوش آمدید.\n"
+        "جهت مشاهده نرخ‌های آنلاین و ثبت سفارش، از دکمه مینی‌اپ پایین استفاده کنید."
     )
-    await update.message.reply_text(welcome_text)
 
-async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = json.loads(update.message.web_app_data.data)
-    user = update.message.from_user
-    
-    if data.get("action") == "submit_order":
-        name = data.get("name")
-        whatsapp = data.get("whatsapp")
-        amount = data.get("amount")
-        trade_type = "خرید درام" if data.get("trade_type") == "buy" else "فروش درام"
-        total_price = data.get("total_price")
+@bot.message_handler(content_types=['web_app_data'])
+def handle_web_app_data(message):
+    try:
+        data = json.loads(message.web_app_data.data)
+        action = data.get("action")
         
-        msg_for_admin = (
-            f"📥 **سفارش جدید دریافت شد!**\n\n"
-            f"👤 **نام مشتری:** {name}\n"
-            f"📱 **واتس‌اپ:** `{whatsapp}`\n"
-            f"🔄 **نوع معامله:** {trade_type}\n"
-            f"💰 **مبلغ (درام):** {amount}\n"
-            f"💵 **مبلغ کل (تومان):** {total_price}\n"
-            f"🆔 **آیدی تلگرام:** `{user.id}`\n"
-            f"👤 **یوزرنیم:** @{user.username if user.username else 'ندارد'}"
-        )
-        
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ تایید سفارش", callback_data=f"app_{user.id}_{amount}"),
-                InlineKeyboardButton("❌ رد سفارش", callback_data=f"rej_{user.id}")
-            ]
-        ]
-        
-        await context.bot.send_message(chat_id=ADMIN_ID, text=msg_for_admin, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-        await update.message.reply_text("✅ سفارش شما با موفقیت ثبت شد و پس از بررسی توسط مدیریت صرافی، تایید خواهد شد.")
+        # ۱. آپدیت سراسری تنظیمات از پنل مدیریت
+        if action == "update_settings":
+            new_settings = {
+                "base_rate": float(data.get("base_rate", 720)),
+                "buy_fee": float(data.get("buy_fee", 10)),
+                "sell_fee": float(data.get("sell_fee", 10)),
+                "balance_toman": str(data.get("balance_toman", "7,000,000,000 تومان")),
+                "balance_dram": str(data.get("balance_dram", "10,000,000 درام"))
+            }
+            
+            if save_settings_to_file(new_settings):
+                response_text = (
+                    "✅ **تنظیمات سراسری صرافی با موفقیت روی سرور ذخیره شد:**\n\n"
+                    f"🔹 نرخ پایه: {new_settings['base_rate']} تومان\n"
+                    f"🔹 کارمزد خرید از مشتری: {new_settings['buy_fee']}%\n"
+                    f"🔹 کارمزد فروش به مشتری: {new_settings['sell_fee']}%\n"
+                    f"🔹 موجودی تومان: {new_settings['balance_toman']}\n"
+                    f"🔹 موجودی درام: {new_settings['balance_dram']}\n\n"
+                    "📌 **این تغییرات برای همگی کاربران روی تمام گوشی‌ها هم‌اکنون اعمال گردید.**"
+                )
+            else:
+                response_text = "❌ خطا در ذخیره‌سازی تنظیمات روی سرور."
+                
+            bot.send_message(message.chat.id, response_text, parse_mode="Markdown")
+            
+        # ۲. ثبت سفارش مشتری
+        elif action == "submit_order":
+            order_id = data.get("order_id")
+            name = data.get("name")
+            whatsapp = data.get("whatsapp")
+            amount = data.get("amount")
+            trade_type = data.get("trade_type")
+            total_price = data.get("total_price")
+            
+            admin_msg = (
+                f"📥 **سفارش جدید ثبت شد!**\n\n"
+                f"🆔 **کد پیگیری:** `{order_id}`\n"
+                f"👤 **نام مشتری:** {name}\n"
+                f"📱 **واتس‌اپ:** {whatsapp}\n"
+                f"🔄 **نوع معامله:** {trade_type}\n"
+                f"💰 **مبلغ معامله:** {amount} درام\n"
+                f"💵 **مبلغ کل:** {total_price}"
+            )
+            
+            bot.send_message(ADMIN_ID, admin_msg, parse_mode="Markdown")
+            bot.send_message(
+                message.chat.id,
+                f"✅ سفارش شما با کد پیگیری `{order_id}` با موفقیت ثبت شد.\n"
+                f"کارشناسان صرافی به زودی جهت هماهنگی با شما تماس خواهند گرفت.",
+                parse_mode="Markdown"
+            )
 
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    data = query.data.split("_")
-    action = data[0]
-    user_id = int(data[1])
-    
-    if action == "app":
-        try:
-            await context.bot.send_message(chat_id=user_id, text="🎉 سفارش شما توسط مدیریت صرافی تایید شد.")
-        except Exception:
-            pass
-        await query.edit_message_text(text=f"{query.message.text}\n\n✅ **این سفارش توسط شما تایید شد.**")
-        
-    elif action == "rej":
-        try:
-            await context.bot.send_message(chat_id=user_id, text="❌ متاسفانه سفارش شما رد شد. جهت پیگیری با پشتیبانی تماس بگیرید.")
-        except Exception:
-            pass
-        await query.edit_message_text(text=f"{query.message.text}\n\n❌ **این سفارش رد شد.**")
-
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
-    app.add_handler(CallbackQueryHandler(button_callback))
-    
-    print("ربات آماده اجرا است...")
-    app.run_polling()
+    except Exception as e:
+        print("خطا در پردازش داده‌ها:", e)
 
 if __name__ == "__main__":
-    main()
+    print("ربات صرافی آنلاین ارمنستان با موفقیت روشن شد...")
+    bot.infinity_polling()
+        
